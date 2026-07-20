@@ -25,6 +25,9 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
+# 新增腾讯云换源
+RUN sed -i 's|http://deb.debian.org|http://mirrors.tencentyun.com|g' /etc/apt/sources.list.d/debian.sources
+
 # 安装系统依赖（wkhtmltopdf 含 wkhtmltoimage，用于 Markdown 转图片 Issue #289）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
@@ -44,9 +47,12 @@ RUN groupadd -g 1000 dsa && \
 
 # 复制依赖文件
 COPY requirements.txt .
+# 拷贝宿主机提前下载好的alphasift源码至容器内
+COPY ./alphasift /app/alphasift
 
-# 安装 Python 依赖
-RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt
+# 先安装通用依赖，再离线本地安装选股插件
+RUN --mount=type=cache,target=/root/.cache/pip pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple \
+&& pip install /app/alphasift -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制应用代码
 COPY *.py ./
