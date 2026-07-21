@@ -1149,7 +1149,9 @@ class EfinanceFetcher(BaseFetcher):
         """
         获取股票所属板块
         
-        数据来源：ef.stock.get_belong_board()
+        数据来源优先级：
+        1. efinance 库 (ef.stock.get_belong_board)
+        2. 东方财富 API 直接调用 (fallback)
         
         Args:
             stock_code: 股票代码
@@ -1159,12 +1161,13 @@ class EfinanceFetcher(BaseFetcher):
         """
         import efinance as ef
         
+        # 尝试 efinance 库
         try:
             # 防封禁策略
             self._set_random_user_agent()
             self._enforce_rate_limit()
             
-            logger.info(f"[API调用] ef.stock.get_belong_board(stock_code={stock_code}) 获取所属板块...")
+            logger.info(f"[API 调用] ef.stock.get_belong_board(stock_code={stock_code}) 获取所属板块...")
             import time as _time
             api_start = _time.time()
             
@@ -1173,17 +1176,117 @@ class EfinanceFetcher(BaseFetcher):
             api_elapsed = _time.time() - api_start
             
             if df is not None and not df.empty:
-                logger.info(f"[API返回] ef.stock.get_belong_board 成功: 返回 {len(df)} 个板块, 耗时 {api_elapsed:.2f}s")
+                logger.info(f"[API 返回] ef.stock.get_belong_board 成功：返回 {len(df)} 个板块，耗时 {api_elapsed:.2f}s")
                 return df
             else:
-                logger.warning(f"[API返回] 未获取到 {stock_code} 的板块信息")
-                return None
-            
+                logger.warning(f"[API 返回] 未获取到 {stock_code} 的板块信息，尝试 fallback")
         except FuturesTimeoutError:
-            logger.warning(f"[超时] ef.stock.get_belong_board({stock_code}) 超过 {_EF_CALL_TIMEOUT}s，跳过")
-            return None
+            logger.warning(f"[超时] ef.stock.get_belong_board({stock_code}) 超过 {_EF_CALL_TIMEOUT}s，尝试 fallback")
         except Exception as e:
-            logger.error(f"[API错误] 获取 {stock_code} 所属板块失败: {e}")
+            logger.warning(f"[efinance 失败] 获取 {stock_code} 所属板块失败：{e}，尝试 fallback")
+        
+        # Fallback: 尝试 akshare
+        return self._get_belong_board_from_akshare(stock_code)
+    
+    def _get_belong_board_from_akshare(self, stock_code: str) -> Optional[pd.DataFrame]:
+        """
+        通过 akshare 获取股票所属板块 (fallback 方案)
+        
+        策略：
+        1. 遍历所有行业板块，检查股票是否在板块成分股中
+        2. 遍历所有概念板块，检查股票是否在板块成分股中
+        
+        Args:
+            stock_code: 股票代码 (如 '603212')
+            
+        Returns:
+            所属板块 DataFrame，获取失败返回 None
+        """
+        try:
+            import akshare as ak
+            
+            logger.info(f"[akshare fallback] 开始获取 {stock_code} 的板块信息...")
+            
+            boards = []
+            
+            # 1. 获取行业板块列表
+            try:
+                logger.debug(f"[akshare] 获取行业板块列表...")
+                industry_df = ak.stock_board_industry_name_em()
+                if industry_df is not None and not industry_df.empty:
+                    logger.debug(f"[akshare] 共 {len(industry_df)} 个行业板块")
+                    
+                    # 遍历每个行业板块，检查是否包含目标股票
+                    for _, row in industry_df.iterrows():
+                        board_name = row.get('板块名称', '')
+                        if not board_name:
+                            continue
+                        
+                        try:
+                            # 获取该行业板块的成分股
+                            cons_df = ak.stock_board_industry_cons_em(symbol=board_name)
+                            if cons_df is not None and not cons_df.empty:
+                                # 检查股票代码是否在成分股中
+                                if '代码' in cons_df.columns and stock_code in cons_df['代码'].values:
+                                    boards.append({
+                                        '板块名称': board_name,
+                                        '板块代码': '',
+                                        '板块类型': '行业',
+                                        '股票名称': '',
+                                        '股票代码': stock_code
+                                    })
+                                    logger.debug(f"[akshare] 找到行业板块：{board_name}")
+                        except Exception as e:
+                            # 单个板块获取失败不影响整体
+                            logger.debug(f"[akshare] 获取行业板块 {board_name} 成分股失败：{e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"[akshare] 获取行业板块列表失败：{e}")
+            
+            # 2. 获取概念板块列表
+            try:
+                logger.debug(f"[akshare] 获取概念板块列表...")
+                concept_df = ak.stock_board_concept_name_em()
+                if concept_df is not None and not concept_df.empty:
+                    logger.debug(f"[akshare] 共 {len(concept_df)} 个概念板块")
+                    
+                    # 遍历每个概念板块，检查是否包含目标股票
+                    for _, row in concept_df.iterrows():
+                        board_name = row.get('板块名称', '')
+                        if not board_name:
+                            continue
+                        
+                        try:
+                            # 获取该概念板块的成分股
+                            cons_df = ak.stock_board_concept_cons_em(symbol=board_name)
+                            if cons_df is not None and not cons_df.empty:
+                                # 检查股票代码是否在成分股中
+                                if '代码' in cons_df.columns and stock_code in cons_df['代码'].values:
+                                    boards.append({
+                                        '板块名称': board_name,
+                                        '板块代码': '',
+                                        '板块类型': '概念',
+                                        '股票名称': '',
+                                        '股票代码': stock_code
+                                    })
+                                    logger.debug(f"[akshare] 找到概念板块：{board_name}")
+                        except Exception as e:
+                            # 单个板块获取失败不影响整体
+                            logger.debug(f"[akshare] 获取概念板块 {board_name} 成分股失败：{e}")
+                            continue
+            except Exception as e:
+                logger.warning(f"[akshare] 获取概念板块列表失败：{e}")
+            
+            if boards:
+                df = pd.DataFrame(boards)
+                logger.info(f"[akshare fallback] 成功获取 {stock_code} 的板块信息：{len(boards)} 个板块")
+                return df
+            else:
+                logger.warning(f"[akshare fallback] 未获取到 {stock_code} 的板块信息")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"[akshare fallback] 获取 {stock_code} 所属板块失败：{e}")
             return None
     
     def get_enhanced_data(self, stock_code: str, days: int = 60) -> Dict[str, Any]:

@@ -61,7 +61,7 @@ export function useDashboardLifecycle({
       void refreshMarketReviewHistory?.(true);
       void refreshActiveTasks();
       onDashboardDataRefresh?.();
-    }, 30_000);
+    }, 600_000);
 
     return () => window.clearInterval(intervalId);
   }, [enabled, onDashboardDataRefresh, refreshHistory, refreshMarketReviewHistory, refreshStockBar, refreshActiveTasks]);
